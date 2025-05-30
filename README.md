@@ -34,7 +34,7 @@ export PRIVATE_TOKEN=<your-access-token>
 
 4. Run the script:
 ```
-bash migrate2.sh
+bash export.sh
 ```
 
 ## GitLab Export/Import Rate Limits
