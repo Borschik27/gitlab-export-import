@@ -1,7 +1,8 @@
 # GitLab Migrate Repos
 
 This project helps you migrate repositories between GitLab instances or versions using the GitLab project export/import API.
-For example, if you need to migrate from version 8.9.x to 14.x.x or oth. You have few projects and gradual migration is long
+For example, if you need to migrate from version 8.9.x to 14.x.x or oth. You have few projects and gradual migration is long.
+
 It is based on a Bash script that connects to a private GitLab instance via the API and exports repositories into the custom local directory directory.
 
 ## Features
