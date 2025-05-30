@@ -25,15 +25,14 @@ It is based on a Bash script that connects to a private GitLab instance via the 
 ```
 sudo apt install jq curl
 ```
-
-2. Set your GitLab instance URL and private token:
+2. Open export.sh and replace url, token, data dir or Set your GitLab instance URL, private token and custom dir:
 ```
-export PRIVATE_TOKEN=<your-access-token>
+export PRIVATE_TOKEN=your-access-token
+export GITLAB_URL=your-gitlab-address
+export EXPORT_DIR=your-local-dir
 ```
 
-3. Open migrate2.sh and replace <gitlab-url> with the actual URL of your GitLab instance.
-
-4. Run the script:
+3. Run the script:
 ```
 bash export.sh
 ```
@@ -60,18 +59,21 @@ Before running the script, set the following variables:
 ```
 GITLAB_URL="<gitlab-url>"             # Your GitLab instance URL (e.g. https://gitlab.example.com)
 PRIVATE_TOKEN="your-access-token"     # GitLab personal access token with API access
+EXPORT_DIR="${EXPORT_DIR:-exports}"   # Local data directory for exporting projects
 ```
 
 You can also export the token before running the script:
 ```
 export PRIVATE_TOKEN=your-access-token
+export GITLAB_URL=your-gitlab-address
+export EXPORT_DIR=your-local-dir
 ```
 
 ## Output
 
 All exported repositories will be saved under:
 ```
-./exports/<group-path>/<project-name>.tar.gz
+./$EXPORT_DIR/<group-path>/<project-name>.tar.gz
 ```
 
 ## Logging
