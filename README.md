@@ -1,88 +1,93 @@
 # GitLab Migrate Repos
 
-This project helps you migrate between GitLab instances or versions using GitLab's project export/import functionality.
+This project helps you migrate repositories between GitLab instances or versions using the GitLab project export/import API.
 
-It is based on a Bash script that interacts with a private GitLab instance via the GitLab API.  
-The script exports repositories to the following structure:
-
-```
-./export/$group-id/$repo-name.tar.gz
-```
+It is based on a Bash script that connects to a private GitLab instance via the API and exports repositories into the `./exports/$group-id/$repo-name.tar.gz` directory.
 
 ## Features
 
-- Automatically fetches all GitLab groups and their projects (including subgroups)
-- Triggers project exports and waits until they are ready
-- Downloads exported `.tar.gz` files to a local folder structure
-- Logs all actions to `export.log`
+Automatically detects all groups and subgroups.
 
-## Prerequisites
+Exports all repositories within those groups.
 
-Make sure the following tools are installed:
+Tracks the export status and waits until it's ready for download.
 
-- `bash`
-- `curl`
-- [`jq`](https://stedolan.github.io/jq/)
+Handles GitLab rate limits for export/import requests.
+
+Logs actions with timestamps into export.log.
+
+Respects user-defined export rate limits to avoid GitLab throttling.
+
+## Usage
+
+1. Make sure you have jq and curl installed:
+```
+sudo apt install jq curl
+```
+
+2. Set your GitLab instance URL and private token:
+```
+export PRIVATE_TOKEN=<your-access-token>
+```
+
+3. Open migrate2.sh and replace <gitlab-url> with the actual URL of your GitLab instance.
+
+4. Run the script:
+```
+bash migrate2.sh
+```
+
+## GitLab Export/Import Rate Limits
+
+Important: Before running the script, make sure to check the export/import rate limits in GitLab:
+
+Navigate to: `Admin Area > Settings > Network > Import and export rate limits`
+
+By default, GitLab allows no more than 6 export/import requests per minute.
+
+This script respects that limit using the following variables:
+
+`MAX_EXPORTS_PER_MINUTE` — Number of allowed exports per minute (default: 6).
+
+`EXPORT_INTERVAL_SECONDS` — Automatically calculated delay between exports based on the above limit.
+
+If the number of exports exceeds the rate limit within a minute, the script will pause for 2 minutes before continuing. This helps avoid HTTP 429 errors (Too Many Requests).
 
 ## Configuration
 
 Before running the script, set the following variables:
-
-```bash
+```
 GITLAB_URL="<gitlab-url>"             # Your GitLab instance URL (e.g. https://gitlab.example.com)
 PRIVATE_TOKEN="your-access-token"     # GitLab personal access token with API access
 ```
 
 You can also export the token before running the script:
-
-```bash
+```
 export PRIVATE_TOKEN=your-access-token
 ```
 
-⚠️ Important: Check GitLab Import/Export Rate Limits
-Before running the script, ensure that the Import and Export rate limits in your GitLab instance are properly configured.
+## Output
 
-Navigate to:
-Admin Area > Settings > Network > Import and export rate limits
-
-By default, GitLab allows only 6 export/import operations per minute, which may cause the script to hit rate limits if you're exporting many repositories.
-
-Consider increasing these values temporarily during large migrations.
-
-## Usage
-Simply run:
-
-```bash 
-bash migrate2.sh
+All exported repositories will be saved under:
 ```
-
-The script will:
-
-Fetch all groups via the GitLab API
-
-Export all projects found in those groups
-
-Wait for each export to finish (with a timeout of 30 minutes per project)
-
-Download the resulting archive to exports/<group-path>/<repo>.tar.gz
-
-## Example Output
-
-```java
-exports/
-├── mygroup
-│   ├── project1.tar.gz
-│   └── project2.tar.gz
-└── anothergroup
-    └── subproject.tar.gz
+./exports/<group-path>/<project-name>.tar.gz
 ```
 
 ## Logging
-All actions are logged to export.log.
+
+You can monitor the progress in real time via:
+```
+tail -f export.log
+```
+
+All actions, including wait states and errors, are logged in export.log.
 
 ## Notes
-Make sure your GitLab token has sufficient permissions (at least read_api and read_repository)
 
-This script does not perform imports — only exports and downloads
+Make sure your GitLab token has sufficient permissions (read_api, read_repository).
 
-Projects with large repositories may take time to export; the script waits and retries until the export is complete or times out
+This script performs exports only, not imports.
+
+Projects with large repositories may take time to export.
+
+The script uses an internal counter and rate control to avoid hitting GitLab API rate limits.
