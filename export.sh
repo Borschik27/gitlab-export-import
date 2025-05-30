@@ -5,7 +5,6 @@ set -e
 LOG_FILE="export.log"
 MAX_WAIT_SECONDS=180 # 3 minuts
 MAX_EXPORTS_PER_MINUTE=6
-EXPORT_INTERVAL_SECONDS=$((60 / MAX_EXPORTS_PER_MINUTE))
 
 # GitLab URL, Token, Export Dir
 GITLAB_URL="${GITLAB_URL:-your-gitlab-url}"
