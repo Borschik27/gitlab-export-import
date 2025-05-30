@@ -6,17 +6,17 @@ It is based on a Bash script that connects to a private GitLab instance via the 
 
 ## Features
 
-Automatically detects all groups and subgroups.
+* Automatically detects all groups and subgroups.
 
-Exports all repositories within those groups.
+* Exports all repositories within those groups.
 
-Tracks the export status and waits until it's ready for download.
+* Tracks the export status and waits until it's ready for download.
 
-Handles GitLab rate limits for export/import requests.
+* Handles GitLab rate limits for export/import requests.
 
-Logs actions with timestamps into export.log.
+* Logs actions with timestamps into export.log.
 
-Respects user-defined export rate limits to avoid GitLab throttling.
+* Respects user-defined export rate limits to avoid GitLab throttling.
 
 ## Usage
 
@@ -41,15 +41,15 @@ bash migrate2.sh
 
 Important: Before running the script, make sure to check the export/import rate limits in GitLab:
 
-Navigate to: `Admin Area > Settings > Network > Import and export rate limits`
+* Navigate to: `Admin Area > Settings > Network > Import and export rate limits`
 
 By default, GitLab allows no more than 6 export/import requests per minute.
 
 This script respects that limit using the following variables:
 
-`MAX_EXPORTS_PER_MINUTE` — Number of allowed exports per minute (default: 6).
+* `MAX_EXPORTS_PER_MINUTE` — Number of allowed exports per minute (default: 6).
 
-`EXPORT_INTERVAL_SECONDS` — Automatically calculated delay between exports based on the above limit.
+* `EXPORT_INTERVAL_SECONDS` — Automatically calculated delay between exports based on the above limit.
 
 If the number of exports exceeds the rate limit within a minute, the script will pause for 2 minutes before continuing. This helps avoid HTTP 429 errors (Too Many Requests).
 
@@ -84,10 +84,10 @@ All actions, including wait states and errors, are logged in export.log.
 
 ## Notes
 
-Make sure your GitLab token has sufficient permissions (read_api, read_repository).
+* Make sure your GitLab token has sufficient permissions (read_api, read_repository).
 
-This script performs exports only, not imports.
+* This script performs exports only, not imports.
 
-Projects with large repositories may take time to export.
+* Projects with large repositories may take time to export.
 
-The script uses an internal counter and rate control to avoid hitting GitLab API rate limits.
+* The script uses an internal counter and rate control to avoid hitting GitLab API rate limits.
