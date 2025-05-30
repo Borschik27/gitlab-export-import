@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -eu
 
 LOG_FILE="export.log"
 MAX_WAIT_SECONDS=180 # 3 min
@@ -49,7 +49,7 @@ export_project() {
 
 	check_export_rate_limit
 	curl --request POST \
-		--header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
+		--silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
 		"${GITLAB_URL}/api/v4/projects/${project_id}/export" >/dev/null
 	export_count=$((export_count + 1))
 }
@@ -101,7 +101,10 @@ while :; do
 	if [[ ${count} -eq 0 ]]; then break; fi
 
 	ids=$(echo "${response}" | jq -r '.[].id')
-	group_ids+=("${ids[@]}")
+	for id in ${ids}; do
+	    group_ids+=("$id")
+	done
+
 	page=$((page + 1))
 done
 
@@ -118,22 +121,23 @@ for GROUP_ID in "${group_ids[@]}"; do
 		if [[ ${count} -eq 0 ]]; then break; fi
 		log "📂 Found ${count} projects on page ${page} for group ID ${GROUP_ID}"
 
-		if ! project_list=$(echo "${projects}" | jq -c '.[]'); then
-			log "❌ Failed to parse projects JSON."
-			continue
-		fi
-
-		while read -r project; do
+		echo "${projects}" | jq -c '.[]' | while read -r project; do
 			id=$(echo "${project}" | jq -r .id)
 			name=$(echo "${project}" | jq -r .name)
 			path_with_namespace=$(echo "${project}" | jq -r .path_with_namespace)
 			namespace_path=$(dirname "${path_with_namespace}")
+			export_path="${EXPORT_DIR}/${namespace_path}/${name}.tar.gz"
+
+			if [[ -f "${export_path}" ]]; then
+				log "⏭ Skip already exported: ${export_path}"
+				continue
+			fi
 
 			log "────────────────────────────────────────────────────────────"
 			log "➡️ Project export ${path_with_namespace} (ID ${id})"
 			export_project "${id}"
 			download_export "${id}" "${name}" "${namespace_path}"
-		done <<<"${project_list}"
+		done
 
 		page=$((page + 1))
 	done
