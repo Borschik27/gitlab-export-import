@@ -18,6 +18,11 @@ It is based on a Bash script that connects to a private GitLab instance via the 
 
 - Respects user-defined export rate limits to avoid GitLab throttling.
 
+- Automatically skips already exported and unchanged repositories (checks last_activity_at vs archive date).
+- If export status is "none" or "null", the script will initiate export even if archive exists (but only if the project was updated or archive is missing).
+- If export fails, the script retries up to 3 times before skipping the project.
+- Handles export timeouts and provides manual API commands for retrying failed exports.
+
 ## Usage
 
 1. Make sure you have jq and curl installed:
@@ -70,12 +75,31 @@ export GITLAB_URL="https://gitlab.example.com"
 export EXPORT_DIR=your-local-dir
 ```
 
+## How it works
+
+- For each project, the script checks if an archive already exists and compares its modification date with the project's last_activity_at from GitLab.
+- If the project hasn't changed since the last export, it is skipped (no redundant downloads).
+- If the export status is "none" or "null" (never exported or status unknown), the script will initiate export only if the project was updated or archive is missing.
+- If export fails (status "failed"), the script retries up to 3 times.
+- If export takes too long (timeout), the project is skipped and a manual API command is provided in the log for retrying.
+
 ## Output
 
 All exported repositories will be saved under:
 
 ```text
 ./$EXPORT_DIR/<group-path>/<project-name>.tar.gz
+```
+
+If a project export times out, you will see a list of such projects at the end of the log with ready-to-use API commands for manual export:
+
+```text
+List of repositories skipped due to export timeout:
+- <group>/<project> (ID: <id>)
+  Manual export via API:
+    curl --request POST --header 'PRIVATE-TOKEN: ...' '.../api/v4/projects/<id>/export'
+    curl --header 'PRIVATE-TOKEN: ...' '.../api/v4/projects/<id>/export' | jq .export_status
+    curl --progress-bar --header 'PRIVATE-TOKEN: ...' '.../api/v4/projects/<id>/export/download' --output '...tar.gz'
 ```
 
 ## Logging
@@ -88,16 +112,19 @@ tail -f export.log
 
 Format:
 
-```java
-[2025-05-30 16:47:34] ────────────────────────────────────────────────────────────
-[2025-05-30 16:47:34] ➡️ Project export <group>/<repo-name> (ID X)
-[2025-05-30 16:47:34] ⏳ Waiting for export: $EXPORT_DIR/<group>/<repo-name> ...
-[2025-05-30 16:47:35] ⌛ <repo-name>: waiting for export 0с...
-[2025-05-30 16:47:40] 📦 Download: $EXPORT_DIR/<group>/<repo-name>.tar.gz
-[2025-05-30 16:47:40] ✅ Export completed: $EXPORT_DIR/<group>/<repo-name>.tar.gz
+```text
+[YYYY-MM-DD HH:MM:SS] ...
+[YYYY-MM-DD HH:MM:SS] ➡️ Project export <group>/<repo-name> (ID X)
+[YYYY-MM-DD HH:MM:SS] ⏳ Waiting for export: $EXPORT_DIR/<group>/<repo-name> ...
+[YYYY-MM-DD HH:MM:SS] ⌛ <repo-name>: waiting for export 0s... (status: started)
+[YYYY-MM-DD HH:MM:SS] 📦 Download: $EXPORT_DIR/<group>/<repo-name>.tar.gz
+[YYYY-MM-DD HH:MM:SS] ✅ Export completed: $EXPORT_DIR/<group>/<repo-name>.tar.gz
+[YYYY-MM-DD HH:MM:SS] ⏭  The repository is already retrieved and has not been changed: ...
+[YYYY-MM-DD HH:MM:SS] ❌ Export failed for ...
+[YYYY-MM-DD HH:MM:SS] ⏱ Export timeout (180 sec): ... Skipping...
 ```
 
-All actions, including wait states and errors, are logged in export.log.
+All actions, including wait states and errors, are logged in export.log. You can also see DEBUG lines with export_status for troubleshooting.
 
 ## Notes
 
@@ -108,3 +135,5 @@ All actions, including wait states and errors, are logged in export.log.
 - Projects with large repositories may take time to export.
 
 - The script uses an internal counter and rate control to avoid hitting GitLab API rate limits.
+
+- The script automatically handles export retries and timeouts, and provides manual API commands for failed exports.
