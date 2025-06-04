@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -eu
-
 LOG_FILE="export.log"
 MAX_WAIT_SECONDS=180 # 3 min
 MAX_EXPORTS_PER_MINUTE=6
