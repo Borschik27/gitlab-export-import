@@ -1,8 +1,8 @@
 #!/bin/bash
-# Импорт проектов из каталога exports/ или одного архива в GitLab через projects/import
-# Использование:
-#   ./import.sh                 # массовый импорт всех архивов из exports/
-#   ./import.sh путь/к/архиву   # импорт только одного архива
+# Import projects from the exports/ directory or a single archive into GitLab via projects/import
+# Usage:
+#   ./import.sh                 # bulk import of all archives from exports/
+#   ./import.sh path/to/archive # import only one archive
 
 LOG_FILE="import.log"
 
@@ -14,7 +14,6 @@ IMPORT_DIR="${IMPORT_DIR:-exports}"
 FAILED_IMPORTS=()
 SKIPPED_UPTODATE=()
 REPLACED_PROJECTS=()
-
 
 # Checking dependencies
 command -v jq >/dev/null 2>&1 || {
@@ -33,122 +32,142 @@ log() {
 	echo "${msg}" | tee -a "${LOG_FILE}"
 }
 
-# Рекурсивное создание вложенных групп
+# Function to normalize path/name for GitLab namespace/path
+normalize_gitlab_path() {
+	# Only latin, digits, -, _, .; spaces and everything else replaced with -
+	echo "$1" | iconv -c -t ascii//TRANSLIT | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g; s/^-*//; s/-*$//'
+}
+
+# Recursive creation of nested groups
 get_or_create_group() {
-  local full_path="$1"
-  local parent_id=""
-  local current_path=""
-  IFS='/' read -ra PARTS <<< "$full_path"
-  for part in "${PARTS[@]}"; do
-    if [[ -z "$current_path" ]]; then
-      current_path="$part"
-    else
-      current_path="$current_path/$part"
-    fi
-    # Проверяем, есть ли такая группа
-    resp=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/groups/${current_path}")
-    group_id=$(echo "$resp" | jq -r .id 2>/dev/null || true)
-    if [[ -z "$group_id" || "$group_id" == "null" ]]; then
-      # Создаём группу
-      data="{\"name\": \"$part\", \"path\": \"$part\""
-      if [[ -n "$parent_id" ]]; then
-        data=", \"parent_id\": $parent_id$data"
-        data="{${data#*, }}"
-      else
-        data="$data}"
-      fi
-      create_group_resp=$(curl --silent --request POST --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
-        --header "Content-Type: application/json" \
-        --data "$data" \
-        "${GITLAB_URL}/api/v4/groups")
-      group_id=$(echo "$create_group_resp" | jq -r .id 2>/dev/null || true)
-      if [[ -z "$group_id" || "$group_id" == "null" ]]; then
-        log "❌ Не удалось создать группу $current_path: $create_group_resp"
-        exit 1
-      fi
-      log "Группа создана: $current_path (id: $group_id)"
-    else
-      log "Группа уже существует: $current_path (id: $group_id)"
-    fi
-    parent_id="$group_id"
-  done
-  echo "$group_id"
+	local full_path="$1"
+	local parent_id=""
+	local current_path=""
+	IFS='/' read -ra PARTS <<<"$full_path"
+	for part in "${PARTS[@]}"; do
+		norm_part=$(normalize_gitlab_path "$part")
+		if [[ -z $current_path ]]; then
+			current_path="$norm_part"
+		else
+			current_path="$current_path/$norm_part"
+		fi
+		# Check if such group exists
+		resp=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/groups/${current_path}")
+		group_id=$(echo "$resp" | jq -r .id 2>/dev/null || true)
+		if [[ -z $group_id || $group_id == "null" ]]; then
+			# Create group
+			data="{\"name\": \"$part\", \"path\": \"$norm_part\""
+			if [[ -n $parent_id ]]; then
+				data=", \"parent_id\": $parent_id$data"
+				data="{${data#*, }}"
+			else
+				data="$data}"
+			fi
+			create_group_resp=$(curl --silent --request POST --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
+				--header "Content-Type: application/json" \
+				--data "$data" \
+				"${GITLAB_URL}/api/v4/groups")
+			group_id=$(echo "$create_group_resp" | jq -r .id 2>/dev/null || true)
+			if [[ -z $group_id || $group_id == "null" ]]; then
+				log "❌ Failed to create group $current_path: $create_group_resp"
+				exit 1
+			fi
+			log "Group created: $current_path (id: $group_id)"
+		else
+			log "Group already exists: $current_path (id: $group_id)"
+		fi
+		parent_id="$group_id"
+	done
+	echo "$group_id"
 }
 
 import_one() {
 	ARCHIVE_PATH="$1"
 	if [[ -z ${ARCHIVE_PATH} || ! -f ${ARCHIVE_PATH} ]]; then
-		log "❌ Укажите путь к архиву .tar.gz (например, ${IMPORT_DIR}/<proj_id_name>/<proj_name>.tar.gz)"
+		log "❌ Specify the path to the .tar.gz archive (e.g., ${IMPORT_DIR}/<proj_id_name>/<proj_name>.tar.gz)"
 		exit 1
 	fi
 	rel_path="${ARCHIVE_PATH#"${IMPORT_DIR}/"}"
 	group_path="$(dirname "${rel_path}")"
 	project_name="$(basename "${rel_path}" .tar.gz)"
 
-	log "────────────────────────────────────────────────────────────"
-	log "➡️ Импорт: ${group_path}/${project_name}"
+	# Build normalized group path from parts
+	IFS='/' read -ra PARTS <<<"${group_path}"
+	norm_group_path=""
+	for part in "${PARTS[@]}"; do
+		norm_part=$(normalize_gitlab_path "$part")
+		if [[ -z $norm_group_path ]]; then
+			norm_group_path="$norm_part"
+		else
+			norm_group_path="$norm_group_path/$norm_part"
+		fi
+	done
 
-	# 1. Рекурсивно создаём группу (и получаем id)
+	norm_project_name=$(normalize_gitlab_path "${project_name}")
+
+	log "────────────────────────────────────────────────────────────"
+	log "➡️ Import: ${group_path}/${project_name}"
+
+	# 1. Recursively create group (and get id)
 	group_id=$(get_or_create_group "$group_path")
 
-	# 2. Проверка существующего проекта
-	get_proj_resp=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/projects?search=${project_name}")
-	project_id=$(echo "${get_proj_resp}" | jq -r ".[] | select(.path_with_namespace==\"${group_path}/${project_name}\") | .id" | head -n1)
-	project_last_activity=$(echo "${get_proj_resp}" | jq -r ".[] | select(.path_with_namespace==\"${group_path}/${project_name}\") | .last_activity_at" | head -n1)
-	archive_mtime=$(date -u -d "@$(stat -c %Y "$ARCHIVE_PATH")" +"%Y-%m-%dT%H:%M:%SZ")
+	# 2. Check for existing project
+	get_proj_resp=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/projects?search=${norm_project_name}")
+	project_id=$(echo "${get_proj_resp}" | jq -r ".[] | select(.path_with_namespace==\"${norm_group_path}/${norm_project_name}\") | .id" | head -n1)
+	project_last_activity=$(echo "${get_proj_resp}" | jq -r ".[] | select(.path_with_namespace==\"${norm_group_path}/${norm_project_name}\") | .last_activity_at" | head -n1)
+	archive_mtime=$(date -u -d "@$(stat -c %Y \"$ARCHIVE_PATH\")" +"%Y-%m-%dT%H:%M:%SZ")
 	if [[ -n ${project_id} && ${project_id} != "null" ]]; then
-		# Сравниваем last_activity_at и дату архива
+		# Compare last_activity_at and archive date
 		if [[ ${project_last_activity} > ${archive_mtime} ]]; then
-			log "Репозиторий ${group_path}/${project_name} актуален (last_activity_at: ${project_last_activity}, архив: ${archive_mtime})"
-			SKIPPED_UPTODATE+=("${group_path}/${project_name}")
+			log "Repository ${norm_group_path}/${norm_project_name} is up to date (last_activity_at: ${project_last_activity}, archive: ${archive_mtime})"
+			SKIPPED_UPTODATE+=("${norm_group_path}/${norm_project_name}")
 			return 0
 		else
-			log "Репозиторий ${group_path}/${project_name} отличается от архива, будет перезаписан (last_activity_at: ${project_last_activity}, архив: ${archive_mtime})"
-			# Удаляем проект
+			log "Repository ${norm_group_path}/${norm_project_name} differs from archive, will be overwritten (last_activity_at: ${project_last_activity}, archive: ${archive_mtime})"
+			# Delete project
 			curl --silent --request DELETE --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/projects/${project_id}"
-			REPLACED_PROJECTS+=("${group_path}/${project_name}")
+			REPLACED_PROJECTS+=("${norm_group_path}/${norm_project_name}")
 			sleep 2
 		fi
 	fi
 
-	# 3. Импортируем проект через projects/import
 	import_resp=$(curl --progress-bar --silent --request POST --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
-		--form "path=${project_name}" \
-		--form "namespace=${group_path}" \
+		--form "path=${norm_project_name}" \
+		--form "namespace=${norm_group_path}" \
+		--form "name=${project_name}" \
 		--form "file=@${ARCHIVE_PATH}" \
 		"${GITLAB_URL}/api/v4/projects/import")
 	if echo "${import_resp}" | grep -q '413 Request Entity Too Large'; then
-		log "❌ Слишком большой архив для ${group_path}/${project_name} (413 Request Entity Too Large)"
-		FAILED_IMPORTS+=("${group_path}/${project_name} (413)")
+		log "❌ Archive too large for ${norm_group_path}/${norm_project_name} (413 Request Entity Too Large)"
+		FAILED_IMPORTS+=("${norm_group_path}/${norm_project_name} (413)")
 		return 1
 	fi
-	log "Ответ на импорт: ${import_resp}"
+	log "Import response: ${import_resp}"
 
-	# 4. Проверяем статус импорта
 	import_id=$(echo "${import_resp}" | jq -r .id 2>/dev/null || true)
 	if [[ -z ${import_id} || ${import_id} == "null" ]]; then
-		log "❌ Не удалось запустить импорт: ${import_resp}"
-		FAILED_IMPORTS+=("${group_path}/${project_name} (import error)")
+		log "❌ Failed to start import: ${import_resp}"
+		FAILED_IMPORTS+=("${norm_group_path}/${norm_project_name} (import error)")
 		return 1
 	fi
-	# Ждём завершения импорта
-	max_wait=180 # максимум 3 минуты
+	# Wait for import to finish
+	max_wait=180 # max 3 minutes
 	waited=0
 	while true; do
 		status_resp=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" "${GITLAB_URL}/api/v4/projects/${import_id}/import")
 		status=$(echo "${status_resp}" | jq -r .import_status)
-		log "Статус импорта: ${status}"
+		log "Import status: ${status}"
 		if [[ ${status} == "finished" ]]; then
-			log "✅ Импорт завершён: ${project_name}"
+			log "✅ Import finished: ${norm_project_name}"
 			break
 		elif [[ ${status} == "failed" ]]; then
-			log "❌ Импорт не удался: ${project_name}"
-			FAILED_IMPORTS+=("${group_path}/${project_name} (import failed)")
+			log "❌ Import failed: ${norm_project_name}"
+			FAILED_IMPORTS+=("${norm_group_path}/${norm_project_name} (import failed)")
 			break
 		fi
 		if ((waited >= max_wait)); then
-			log "⏱ Таймаут ожидания импорта (${max_wait} сек): ${project_name}"
-			FAILED_IMPORTS+=("${group_path}/${project_name} (timeout)")
+			log "⏱ Import timeout (${max_wait} sec): ${norm_project_name}"
+			FAILED_IMPORTS+=("${norm_group_path}/${norm_project_name} (timeout)")
 			break
 		fi
 		sleep 5
@@ -156,28 +175,28 @@ import_one() {
 	done
 }
 
-# Если передан путь к архиву — импортируем только его
+# If an archive path is provided — import only it
 if [[ $# -eq 1 ]]; then
 	import_one "$1"
 	result=$?
 	echo
-	echo "==== Итог ===="
-	echo "Не импортированы (ошибка/размер): ${FAILED_IMPORTS[*]}"
-	echo "Пропущены (актуальны): ${SKIPPED_UPTODATE[*]}"
-	echo "Перезаписаны: ${REPLACED_PROJECTS[*]}"
+	echo "==== Summary ===="
+	echo "Not imported (error/size): ${FAILED_IMPORTS[*]}"
+	echo "Skipped (up to date): ${SKIPPED_UPTODATE[*]}"
+	echo "Overwritten: ${REPLACED_PROJECTS[*]}"
 	exit "${result}"
 fi
 
-# Массовый импорт всех архивов из каталога exports/
+# Bulk import of all archives from exports/
 mapfile -t archives < <(find "${IMPORT_DIR}" -type f -iname '*.tar.gz')
-log "Найдено архивов: ${#archives[@]}"
+log "Archives found: ${#archives[@]}"
 for archive in "${archives[@]}"; do
-	log "Архив для импорта: $archive"
+	log "Archive to import: $archive"
 	import_one "${archive}"
 	log ""
 done
 
-log "==== Итог ===="
-log "Не импортированы (ошибка/размер): ${FAILED_IMPORTS[*]}"
-log "Пропущены (актуальны): ${SKIPPED_UPTODATE[*]}"
-log "Перезаписаны: ${REPLACED_PROJECTS[*]}"
+log "==== Summary ===="
+log "Not imported (error/size): ${FAILED_IMPORTS[*]}"
+log "Skipped (up to date): ${SKIPPED_UPTODATE[*]}"
+log "Overwritten: ${REPLACED_PROJECTS[*]}"
