@@ -7,21 +7,29 @@ It is based on a Bash script that connects to a private GitLab instance via the 
 
 ## Features
 
-- Automatically detects all groups and subgroups.
-- Exports all repositories within those groups.
+- **export.sh**
+  - Exports all projects from all groups (including subgroups).
+  - Exports all personal projects for all users.
+  - Skips up-to-date archives (checks last_activity_at vs archive date).
+  - Handles API rate limits and export timeouts.
+  - Retries failed exports up to 3 times.
+  - Logs all actions with timestamps to `export.log`.
+  - Provides a summary of processed, exported, skipped, and failed projects.
 
-- Tracks the export status and waits until it's ready for download.
+- **import.sh**
+  - Imports all exported archives from the `exports/` directory.
+  - Automatically creates groups/subgroups as needed.
+  - Skips or updates projects based on last activity date.
+  - Logs all actions with timestamps to `import.log`.
+  - Provides a summary of imported, skipped, and failed projects.
 
-- Handles GitLab rate limits for export/import requests.
+## Requirements
 
-- Logs actions with timestamps into export.log.
+- Bash
+- `curl`
+- `jq`
+- GitLab API access token with sufficient permissions (admin/root recommended for full export/import)
 
-- Respects user-defined export rate limits to avoid GitLab throttling.
-
-- Automatically skips already exported and unchanged repositories (checks last_activity_at vs archive date).
-- If export status is "none" or "null", the script will initiate export even if archive exists (but only if the project was updated or archive is missing).
-- If export fails, the script retries up to 3 times before skipping the project.
-- Handles export timeouts and provides manual API commands for retrying failed exports.
 
 ## Usage
 
@@ -31,18 +39,31 @@ It is based on a Bash script that connects to a private GitLab instance via the 
    sudo apt install jq curl
    ```
 
-2. Open export.sh and replace url, token, data dir, or set your GitLab instance URL, private token and custom dir:
+2. Export all projects
 
    ```bash
-   export PRIVATE_TOKEN=your-access-token
    export GITLAB_URL="https://gitlab.example.com"
-   export EXPORT_DIR=your-local-dir
+   export PRIVATE_TOKEN="your-access-token"
+   ./export.sh
    ```
 
-3. Run the script:
+   - All exported archives will be saved in the `exports/` directory by default.
+   - Progress and results are logged to `export.log`.
+
+3. Import all projects
 
    ```bash
-   bash export.sh
+   export GITLAB_URL="https://gitlab.example.com"
+   export PRIVATE_TOKEN="your-access-token"
+   ./import.sh
+   ```
+
+   - All archives from the `exports/` directory will be imported.
+   - Progress and results are logged to `import.log`.
+   - Also you can import only one project by specifying its path:
+
+   ```bash
+   ./import.sh <group-path>/<project-name>
    ```
 
 ## GitLab Export/Import Rate Limits
@@ -104,10 +125,11 @@ List of repositories skipped due to export timeout:
 
 ## Logging
 
-You can monitor the progress in real time via:
+Monitor progress in real time:
 
 ```bash
 tail -f export.log
+tail -f import.log
 ```
 
 Format:
@@ -128,12 +150,8 @@ All actions, including wait states and errors, are logged in export.log. You can
 
 ## Notes
 
-- Make sure your GitLab token has sufficient permissions (read_api, read_repository).
-
-- This script performs exports only, not imports.
-
-- Projects with large repositories may take time to export.
-
-- The script uses an internal counter and rate control to avoid hitting GitLab API rate limits.
-
-- The script automatically handles export retries and timeouts, and provides manual API commands for failed exports.
+- **Personal projects** are imported into a group with the same name as the user (due to GitLab API limitations).
+- To move a project to a user's personal namespace, use the GitLab UI ("Transfer project") after import.
+- For large GitLab instances, the process may take significant time.
+- The scripts respect GitLab export/import rate limits (default: 6 per minute, configurable).
+- All actions, including retries and timeouts, are logged with timestamps.

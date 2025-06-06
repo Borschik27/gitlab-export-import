@@ -29,6 +29,11 @@ log() {
 	echo "${msg}" | tee -a "${LOG_FILE}"
 }
 
+total_processed=0
+total_exported=0
+total_skipped=0
+total_errors=0
+
 check_export_rate_limit() {
 	current_time=$(date +%s)
 	elapsed=$((current_time - start_time))
@@ -94,7 +99,7 @@ download_export() {
 		elif [[ ${export_status} == "finished" ]]; then
 			mkdir -p "${EXPORT_DIR}/${path}"
 			log "📦 Download: ${EXPORT_DIR}/${path}/${name}.tar.gz"
-			curl --progress-bar --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
+			curl --progress-bar --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
 				"${GITLAB_URL}/api/v4/projects/${project_id}/export/download" \
 				--output "${EXPORT_DIR}/${path}/${name}.tar.gz"
 			log "✅ Export completed: ${EXPORT_DIR}/${path}/${name}.tar.gz"
@@ -134,6 +139,9 @@ done
 
 # Processing each group
 for GROUP_ID in "${group_ids[@]}"; do
+	processed_count=0
+	exported_count=0
+	skipped_count=0
 	log "📁 Group Processing ID: ${GROUP_ID}"
 
 	page=1
@@ -145,63 +153,133 @@ for GROUP_ID in "${group_ids[@]}"; do
 		if [[ ${count} -eq 0 ]]; then break; fi
 		log "📂 Found ${count} projects on page ${page} for group ID ${GROUP_ID}"
 
-		echo "${projects}" | jq -c '.[]' | while read -r project; do
+		mapfile -t project_lines < <(echo "${projects}" | jq -c '.[]')
+		for project in "${project_lines[@]}"; do
+			processed_count=$((processed_count + 1))
 			id=$(echo "${project}" | jq -r .id)
 			name=$(echo "${project}" | jq -r .name)
 			path_with_namespace=$(echo "${project}" | jq -r .path_with_namespace)
 			namespace_path=$(dirname "${path_with_namespace}")
 			export_path="${EXPORT_DIR}/${namespace_path}/${name}.tar.gz"
-
-			# # Log export status for debugging
-			# export_status=$(echo "${project}" | jq -r .export_status)
-			# log "DEBUG: ${name} (ID: ${id}) export_status: ${export_status}"
-
 			last_activity_at=$(echo "${project}" | jq -r .last_activity_at)
 			if [[ -f ${export_path} ]]; then
 				project_time=$(date -d "${last_activity_at}" +%s 2>/dev/null)
 				archive_time=$(stat -c %Y "${export_path}")
 				if [[ -n ${project_time} && ${project_time} -le ${archive_time} ]]; then
-					log "⏭  The repository is already retrieved and has not been changed: ${export_path} (last_activity_at: ${last_activity_at})"
+					log "⏭  Already up-to-date: ${export_path} (last_activity_at: ${last_activity_at})"
+					skipped_count=$((skipped_count + 1))
 					continue
 				fi
 			fi
-
-			# If export status is undefined, initiate export only if project was really updated or archive is missing
-			if [[ -z ${export_status} || ${export_status} == "null" || ${export_status} == "none" ]]; then
-				log "🔄 Export not initiated (or status null), initiating export!"
-				log "────────────────────────────────────────────────────────────"
-				log "➡️ Project export ${path_with_namespace} (ID ${id})"
-				export_project "${id}"
-				sleep 10
-				download_export "${id}" "${name}" "${namespace_path}" "${timeout_repos_file}"
-				continue
-			fi
-
 			log "────────────────────────────────────────────────────────────"
-			log "➡️ Project export ${path_with_namespace} (ID ${id})"
+			log "➡️ Exporting project ${path_with_namespace} (ID ${id})"
 			export_project "${id}"
 			sleep 10
 			download_export "${id}" "${name}" "${namespace_path}" "${timeout_repos_file}"
+			exported_count=$((exported_count + 1))
 		done
-
-		# After processing the group, if there was no export/download, log this explicitly
-		if [[ ${count} -eq 0 ]]; then
-			log "There are no projects for export in group ID ${GROUP_ID}."
-		fi
-
 		page=$((page + 1))
 	done
+	log "--- Group ID ${GROUP_ID} summary: Processed: ${processed_count}, Exported: ${exported_count}, Skipped: ${skipped_count} ---"
+	total_processed=$((total_processed + processed_count))
+	total_exported=$((total_exported + exported_count))
+	total_skipped=$((total_skipped + skipped_count))
+done
+
+# Получение всех пользователей
+get_all_users() {
+	local page=1
+	local user_ids=()
+	while :; do
+		response=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
+			"${GITLAB_URL}/api/v4/users?per_page=100&page=${page}")
+		count=$(echo "${response}" | jq 'length')
+		if [[ ${count} -eq 0 ]]; then break; fi
+		ids=$(echo "${response}" | jq -r '.[].id')
+		for id in ${ids}; do
+			user_ids+=("${id}")
+		done
+		page=$((page + 1))
+	done
+	# Кладём по одному id на строку, чтобы mapfile работал корректно
+	printf "%s\n" "${user_ids[@]}"
+}
+
+# Экспорт проектов одного пользователя (личные проекты)
+export_user_projects() {
+	local USER_ID=$1
+	local page=1
+	local processed_count=0
+	local exported_count=0
+	local skipped_count=0
+	log "👤 Exporting personal projects for user ID: ${USER_ID} ==="
+	while :; do
+		projects=$(curl --silent --header "PRIVATE-TOKEN: ${PRIVATE_TOKEN}" \
+			"${GITLAB_URL}/api/v4/users/${USER_ID}/projects?per_page=100&page=${page}")
+		# Проверка на пустой или невалидный JSON
+		if [[ -z ${projects} ]] || ! echo "${projects}" | jq empty 2>/dev/null; then
+			log "❌ Error: Invalid or empty response from API for user ${USER_ID} (page ${page})"
+			break
+		fi
+		count=$(echo "${projects}" | jq 'length')
+		if [[ ${count} -eq 0 ]]; then break; fi
+		mapfile -t project_lines < <(echo "${projects}" | jq -c '.[]')
+		for project in "${project_lines[@]}"; do
+			processed_count=$((processed_count + 1))
+			id=$(echo "${project}" | jq -r .id)
+			name=$(echo "${project}" | jq -r .name)
+			path_with_namespace=$(echo "${project}" | jq -r .path_with_namespace)
+			namespace_path=$(dirname "${path_with_namespace}")
+			export_path="${EXPORT_DIR}/${namespace_path}/${name}.tar.gz"
+			last_activity_at=$(echo "${project}" | jq -r .last_activity_at)
+			if [[ -f ${export_path} ]]; then
+				project_time=$(date -d "${last_activity_at}" +%s 2>/dev/null)
+				archive_time=$(stat -c %Y "${export_path}")
+				if [[ -n ${project_time} && ${project_time} -le ${archive_time} ]]; then
+					log "⏭  Already up-to-date: ${export_path} (last_activity_at: ${last_activity_at})"
+					skipped_count=$((skipped_count + 1))
+					continue
+				fi
+			fi
+			log "────────────────────────────────────────────────────────────"
+			log "➡️ Exporting personal project ${path_with_namespace} (ID ${id})"
+			export_project "${id}"
+			sleep 10
+			download_export "${id}" "${name}" "${namespace_path}" "${timeout_repos_file}"
+			exported_count=$((exported_count + 1))
+		done
+		page=$((page + 1))
+	done
+	log "--- User ID ${USER_ID} summary: Processed: ${processed_count}, Exported: ${exported_count}, Skipped: ${skipped_count} ---"
+	total_processed=$((total_processed + processed_count))
+	total_exported=$((total_exported + exported_count))
+	total_skipped=$((total_skipped + skipped_count))
+}
+
+# После экспорта всех групповых проектов:
+mapfile -t all_users < <(get_all_users) || true
+log "Found ${#all_users[@]} users."
+for uid in "${all_users[@]}"; do
+	export_user_projects "${uid}"
 done
 
 # Output the list of repositories with timeout after completion
 if [[ -s ${timeout_repos_file} ]]; then
-	log "\nList of repositories skipped due to export timeout:"
+	log "List of repositories skipped due to export timeout:"
 	while IFS=":" read -r id name namespace_path; do
 		log "- ${namespace_path}/${name} (ID: ${id})"
 		log "  Manual export via API:"
 		log "    curl --request POST --header 'PRIVATE-TOKEN: ${PRIVATE_TOKEN}' '${GITLAB_URL}/api/v4/projects/${id}/export'"
 		log "    curl --header 'PRIVATE-TOKEN: ${PRIVATE_TOKEN}' '${GITLAB_URL}/api/v4/projects/${id}/export' | jq .export_status"
 		log "    curl --progress-bar --header 'PRIVATE-TOKEN: ${PRIVATE_TOKEN}' '${GITLAB_URL}/api/v4/projects/${id}/export/download' --output '${EXPORT_DIR}/${namespace_path}/${name}.tar.gz'"
+		total_errors=$((total_errors + 1))
 	done <"${timeout_repos_file}"
 fi
 rm -f "${timeout_repos_file}"
+
+log "==== Export finished for all groups and all personal projects ===="
+log "==== Summary ===="
+log "Total processed:   ${total_processed}"
+log "Total exported:    ${total_exported}"
+log "Total skipped:     ${total_skipped}"
+log "Total with errors: ${total_errors}"
